@@ -29,7 +29,11 @@ class DOLPHIN:
         # Set device and precision
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model.to(self.device)
-        self.model = self.model.half()  # Always use half precision by default
+        # Use float16 on CUDA, float32 on CPU
+        if self.device == "cuda":
+            self.model = self.model.half()
+        else:
+            self.model = self.model.float()
         
         # set tokenizer
         self.tokenizer = self.processor.tokenizer
