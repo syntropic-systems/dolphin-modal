@@ -152,3 +152,9 @@ Desktop.ini
 
 fusion_result.json
 kernel_meta/
+
+# Model files and test results
+hf_model
+hf_model/
+test_results/
+test_results_mps/
