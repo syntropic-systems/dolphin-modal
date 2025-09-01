@@ -1,223 +1,232 @@
 """
 Modal deployment for Dolphin document parsing model
-High-concurrency GPU-accelerated image processing API
+High-concurrency GPU-accelerated image processing API following VLM best practices
 """
 
 import io
-import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Optional
 
 import modal
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from PIL import Image
 
 # Modal app configuration
 app = modal.App("dolphin-parser")
 
+# Model storage using Modal Volume (persists across deployments)
+MODEL_VOL_PATH = Path("/models")
+MODEL_VOL = modal.Volume.from_name("dolphin-model", create_if_missing=True)
+volumes = {MODEL_VOL_PATH: MODEL_VOL}
+
+def download_dolphin_model():
+    """Download Dolphin model to persistent volume during image build"""
+    from huggingface_hub import snapshot_download
+    
+    model_path = MODEL_VOL_PATH / "Dolphin"
+    
+    print("Downloading ByteDance/Dolphin model to volume...")
+    snapshot_download(
+        repo_id="ByteDance/Dolphin",
+        local_dir=str(model_path),
+        ignore_patterns=["*.git*", "README.md", ".gitattributes"]
+    )
+    print(f"Model downloaded to {model_path}")
+
 # Define the Modal image with all dependencies
 dolphin_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install([
+    .apt_install(
+        "libgl1-mesa-glx",  # For OpenCV
+        "libglib2.0-0",     # For OpenCV
+        "libsm6",           # For OpenCV
+        "libxext6",         # For OpenCV  
+        "libxrender-dev",   # For OpenCV
+        "libgomp1",         # For OpenMP support
+        "libglib2.0-0"      # For general compatibility
+    )
+    .pip_install(
         "torch==2.8.0",
         "torchvision==0.23.0", 
         "transformers==4.47.0",
         "accelerate==1.6.0",
         "timm==0.5.4",
         "pillow==9.3.0",
-        "opencv-python==4.11.0.86",
+        "opencv-python-headless==4.11.0.86",  # Headless version for servers
         "numpy==1.26.4",
         "omegaconf==2.3.0",
         "pymupdf==1.26",
         "fastapi",
-        "python-multipart"
-    ])
-    .copy_local_dir(".", "/app")
-    .workdir("/app")
-)
-
-# FastAPI app
-web_app = FastAPI(
-    title="Dolphin Document Parser API",
-    description="GPU-accelerated document parsing with Modal",
-    version="2.0.0",
-)
-
-# Add CORS middleware
-web_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+        "python-multipart",
+        "huggingface_hub"
+    )
+    .run_function(download_dolphin_model, volumes=volumes)  # Download to volume
+    .add_local_dir(".", remote_path="/app")  # Add source code LAST
 )
 
 # File validation constants
 SUPPORTED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
-
-def validate_image_file(file: UploadFile) -> None:
-    """Validate uploaded image file"""
-    if file.size and file.size > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.1f}MB"
-        )
-    
-    if file.filename:
-        file_ext = Path(file.filename).suffix.lower()
-        if file_ext not in SUPPORTED_IMAGE_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type: {file_ext}. Supported types: {', '.join(SUPPORTED_IMAGE_EXTENSIONS)}"
-            )
-
-
-@app.function(
+# Dolphin Parser Service Class following VLM best practices
+@app.cls(
     image=dolphin_image,
-    gpu=modal.gpu.A100(),  # Use A100 for optimal performance
-    concurrency_limit=10,  # Max 10 parallel workers as requested
-    container_idle_timeout=300,  # Keep containers warm for 5 minutes
+    gpu="A100",
+    max_containers=10,  # Max 10 parallel workers as requested
+    scaledown_window=300,  # Keep containers warm for 5 minutes  
     timeout=600,  # 10 minute timeout per request
-    allow_concurrent_inputs=1,  # Process one image per container instance
+    volumes=volumes,
 )
-@modal.asgi_app()
-def fastapi_app():
-    """Modal ASGI app wrapper"""
+@modal.concurrent(max_inputs=100)  # Handle multiple requests per container
+class DolphinParser:
     
-    # Import and initialize model inside the Modal function
-    from demo_page_hf import DOLPHIN
+    @modal.enter()
+    def start_model(self):
+        """Load Dolphin model once when container starts"""
+        import os
+        import sys
+        
+        # Setup Python environment
+        os.chdir("/app")
+        if "/app" not in sys.path:
+            sys.path.insert(0, "/app")
+        
+        print(f"Working directory: {os.getcwd()}")
+        print(f"Contents of /app: {sorted(os.listdir('/app'))}")
+        
+        # Import DOLPHIN class
+        from demo_page_hf import DOLPHIN
+        
+        # Load model from persistent volume
+        model_path = str(MODEL_VOL_PATH / "Dolphin")
+        print(f"Loading Dolphin model from {model_path}...")
+        
+        self.model = DOLPHIN(model_path)
+        print(f"Model loaded successfully on device: {self.model.device}")
     
-    # Global model instance - loaded once per container
-    model = None
-    
-    def get_model():
-        nonlocal model
-        if model is None:
-            print("Loading Dolphin model...")
-            model = DOLPHIN("./hf_model")
-            print(f"Model loaded successfully on device: {model.device}")
-        return model
-
-    @web_app.get("/")
-    async def root():
-        """Root endpoint with API information"""
-        return {
-            "service": "Dolphin Document Parser API - Modal",
-            "version": "2.0.0",
-            "status": "running",
-            "deployment": "Modal GPU",
-            "endpoints": {
-                "parse_image": "/parse",
-                "health_check": "/health",
-                "server_status": "/status"
-            }
-        }
-
-    @web_app.get("/health")
-    async def health_check():
-        """Health check endpoint"""
-        return {
-            "status": "healthy",
-            "timestamp": time.time(),
-            "deployment": "Modal GPU",
-            "gpu_available": True
-        }
-
-    @web_app.get("/status")
-    async def get_status():
-        """Get server status"""
-        return {
-            "server": "running",
-            "deployment": "Modal",
-            "gpu_type": "A100",
-            "concurrency_limit": 10,
-            "supported_formats": list(SUPPORTED_IMAGE_EXTENSIONS),
-            "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024)
-        }
-
-    @web_app.post("/parse")
-    async def parse_image(
-        file: UploadFile = File(...),
-        max_batch_size: Optional[int] = 16
-    ):
+    @modal.fastapi_endpoint(method="POST", docs=True)
+    def parse(self, request: dict) -> dict:
         """
         Parse a document image and return structured results
         
         Args:
-            file: Image file to parse (jpg, jpeg, png)
-            max_batch_size: Maximum batch size for element processing
+            request: JSON with base64 image data or image_url
         
         Returns:
             JSON response with parsed document structure
         """
+        import base64
+        import requests
+        from PIL import Image
         
-        # Validate file
-        validate_image_file(file)
-        
-        # Get model instance
-        dolphin_model = get_model()
-        
-        # Generate unique request ID
+        start_time = time.perf_counter()
         request_id = str(uuid.uuid4())
         
         try:
-            # Read file content
-            file_content = await file.read()
+            # Handle image input (base64 or URL)
+            if "image_data" in request:
+                # Base64 encoded image
+                image_data = base64.b64decode(request["image_data"])
+                image = Image.open(io.BytesIO(image_data)).convert("RGB")
+                filename = request.get("filename", "uploaded_image.jpg")
+                
+            elif "image_url" in request:
+                # Image from URL  
+                response = requests.get(request["image_url"])
+                response.raise_for_status()
+                image = Image.open(io.BytesIO(response.content)).convert("RGB")
+                filename = request["image_url"].split("/")[-1]
+                
+            else:
+                raise ValueError("Either 'image_data' (base64) or 'image_url' must be provided")
             
-            # Process image directly from memory
-            start_time = time.perf_counter()
+            # Validate image size
+            if len(str(image.size)) > MAX_FILE_SIZE:  # Rough size check
+                raise ValueError(f"Image too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.1f}MB")
             
-            # Open image from bytes
-            image = Image.open(io.BytesIO(file_content)).convert("RGB")
+            # Parse document using full two-stage process (like demo_page_hf.py)
+            from demo_page_hf import process_single_image
             
-            # Use the chat method for document parsing
-            result = dolphin_model.chat("Parse the reading order of this document.", image)
+            # Use the complete processing pipeline
+            _, recognition_results = process_single_image(
+                image=image,
+                model=self.model,
+                save_dir=None,  # Don't save files
+                image_name=filename.split('.')[0],
+                max_batch_size=16,
+                save_individual=False
+            )
             
-            end_time = time.perf_counter()
-            processing_time = end_time - start_time
+            processing_time = time.perf_counter() - start_time
             
-            # Prepare response
-            response_data = {
+            return {
                 "request_id": request_id,
-                "filename": file.filename,
-                "file_type": Path(file.filename).suffix.replace('.', '').upper() if file.filename else "JPG",
+                "filename": filename,
                 "processing_time_seconds": round(processing_time, 2),
                 "timestamp": time.time(),
-                "results": {
-                    "content": result,
-                    "format": "text"
-                },
+                "results": recognition_results,  # Full parsed JSON structure
                 "metadata": {
-                    "image_size": image.size,
-                    "model_device": dolphin_model.device,
-                    "content_length": len(result)
+                    "image_size": list(image.size),
+                    "model_device": self.model.device,
+                    "total_elements": len(recognition_results) if isinstance(recognition_results, list) else len(recognition_results.get("elements", []))
                 }
             }
             
-            return JSONResponse(content=response_data)
-            
         except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "Processing failed",
-                    "message": str(e),
-                    "request_id": request_id
-                }
-            )
-
-    return web_app
+            return {
+                "request_id": request_id,
+                "error": str(e),
+                "status": "failed"
+            }
+    
+    @modal.fastapi_endpoint(method="GET")
+    def health(self) -> dict:
+        """Health check endpoint"""
+        return {
+            "status": "healthy", 
+            "timestamp": time.time(),
+            "deployment": "Modal GPU",
+            "model_loaded": hasattr(self, 'model')
+        }
+    
+    @modal.exit()
+    def shutdown_model(self):
+        """Clean up when container shuts down"""
+        if hasattr(self, 'model'):
+            print("Shutting down Dolphin model...")
+            del self.model
 
 
 @app.local_entrypoint()
 def main():
-    """Local entrypoint for testing"""
-    print("🚀 Deploying Dolphin Parser to Modal...")
-    print("📝 Use `modal deploy modal_app.py` to deploy")
-    print("🌐 Access via: https://{your-app-id}.modal.run/parse")
+    """Local entrypoint for testing the deployed service"""
+    import json
+    import urllib.request
+    import base64
+    
+    parser = DolphinParser()
+    
+    # Test with a sample image (convert to base64)
+    test_image_path = Path("demo/page_imgs/page_1.jpeg") 
+    if test_image_path.exists():
+        with open(test_image_path, "rb") as f:
+            image_data = base64.b64encode(f.read()).decode()
+        
+        payload = json.dumps({
+            "image_data": image_data,
+            "filename": "page_1.jpeg"
+        })
+        
+        print("Testing Dolphin parser...")
+        req = urllib.request.Request(
+            parser.parse.get_web_url(),
+            data=payload.encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode())
+            print("Response:", result)
+    else:
+        print("Test image not found, skipping test")
