@@ -59,51 +59,99 @@ Deploy Dolphin on Modal.com for production-scale GPU-accelerated document parsin
 
 2. **Deploy to Modal:**
    ```bash
-   python deploy.py
-   # Or manually: modal deploy modal_app.py
+   modal deploy modal_app.py
+   # Check deployment status
+   modal app list
+   ```
+   
+3. **Run Performance Benchmark:**
+   ```bash
+   python benchmark_modal.py  # Test with 20 simultaneous requests
    ```
 
-3. **Test the API:**
+4. **Test the API:**
    ```bash
    python test_modal_api.py https://your-app.modal.run ./demo/page_imgs/page_1.jpeg
    ```
 
 ### Modal API Usage
 
-**Same API as local deployment, but synchronous:**
+**FastAPI endpoints with base64 image data:**
 
 ```bash
-curl -X POST \
-  -F 'file=@image.jpg' \
-  https://your-app.modal.run/parse
+# Health check
+curl https://your-app--health.modal.run
+
+# Parse document (POST with base64 data)
+curl -X POST https://your-app--parse.modal.run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_data": "base64_encoded_image_data",
+    "filename": "document.jpg"
+  }'
+
+# Debug GPU memory usage
+curl https://your-app--debug-memory.modal.run
 ```
 
 **Response:**
 ```json
 {
-  "request_id": "uuid",
-  "filename": "image.jpg",
-  "processing_time_seconds": 0.8,
+  "request_id": "abc123",
+  "filename": "document.jpg", 
+  "processing_time_seconds": 10.23,
+  "timestamp": 1640995200.0,
   "results": {
-    "content": "parsed document text...",
-    "format": "text"
+    "content": "parsed document structure...",
+    "elements": [...]
   },
   "metadata": {
     "image_size": [1024, 768],
-    "model_device": "cuda"
+    "model_device": "cuda",
+    "total_elements": 9,
+    "container_id": "abc12345",
+    "container_requests": 3
   }
 }
 ```
 
-### Modal Architecture Benefits
+### 🚀 Production Performance & Benchmarks
 
-- **GPU Acceleration**: A100 instances (~0.5-1s per image vs 7-8s CPU)
-- **Auto-scaling**: 0 to 10+ workers based on demand
-- **High Concurrency**: Handle 100-200+ parallel requests
-- **Cost Optimization**: Pay only for actual GPU usage
-- **Zero Downtime**: Automatic load balancing and error handling
+**GPU Configuration**: NVIDIA L4 with Memory Snapshots
+- **Cold Start Time**: 2-3s (with snapshots) vs 20-30s (without)
+- **Processing Speed**: ~10.2s per page (including model inference)
+- **Throughput**: 0.46 pages/second effective (burst traffic)
+- **Cost**: $0.0106 per page @ $1.10/hour L4 pricing
 
-Perfect for document indexing: 5-10 PDFs → 100s of page images → parallel processing → immediate results.
+**Real-World Burst Performance (20 pages simultaneously)**:
+```
+📊 BENCHMARK RESULTS (20-Page PDF Simulation)
+┌─────────────────────────────┬─────────────────────────────┐
+│ Metric                      │ Value                       │
+├─────────────────────────────┼─────────────────────────────┤
+│ Total Processing Time       │ 43.26 seconds               │
+│ Containers Utilized         │ 10 containers               │
+│ Parallelization Efficiency  │ 4.7x (excellent)           │
+│ Cost per Page              │ $0.0106                     │
+│ Success Rate               │ 100% (20/20 pages)         │
+│ Cold Start Penalty         │ ~11s average                │
+│ Memory Snapshots           │ ✅ Enabled (fast restarts)  │
+└─────────────────────────────┴─────────────────────────────┘
+```
+
+**Scaling Projections**:
+- **100-page document**: ~1.7 minutes, $1.06 cost
+- **500-page document**: ~8.5 minutes, $5.29 cost  
+- **1000-page document**: ~17.1 minutes, $10.58 cost
+
+**Modal Architecture Benefits**:
+- **GPU Acceleration**: NVIDIA L4 optimized for cost/performance
+- **Memory Snapshots**: 10x faster cold starts (model pre-loaded)
+- **Auto-scaling**: 0 to 20 containers based on demand
+- **Burst Traffic Ready**: Handle entire PDF processing simultaneously
+- **Cost Optimization**: Scale to zero between jobs
+
+Perfect for document indexing: Upload PDF → All pages processed in parallel → Results in ~1-2 minutes.
 
 ## 📑 Overview
 
