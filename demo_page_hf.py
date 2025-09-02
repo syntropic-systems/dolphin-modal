@@ -220,16 +220,22 @@ def process_elements(layout_results, padded_image, dims, model, max_batch_size, 
             cropped = padded_image[y1:y2, x1:x2]
             if cropped.size > 0 and cropped.shape[0] > 3 and cropped.shape[1] > 3:
                 if label == "fig":
-                    pil_crop = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                    if save_dir:
+                        pil_crop = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                        figure_filename = save_figure_to_local(pil_crop, save_dir, image_name, reading_order)
+                        figure_text = f"![Figure](figures/{figure_filename})"
+                        figure_path = f"figures/{figure_filename}"
+                    else:
+                        # When save_dir is None, just mark it as a figure without saving
+                        figure_text = "[Figure]"
+                        figure_path = None
                     
-                    figure_filename = save_figure_to_local(pil_crop, save_dir, image_name, reading_order)
-                    
-                    # For figure regions, store relative path instead of base64
+                    # For figure regions, store relative path or placeholder
                     figure_results.append(
                         {
                             "label": label,
-                            "text": f"![Figure](figures/{figure_filename})",
-                            "figure_path": f"figures/{figure_filename}",
+                            "text": figure_text,
+                            "figure_path": figure_path,
                             "bbox": [orig_x1, orig_y1, orig_x2, orig_y2],
                             "reading_order": reading_order,
                         }
