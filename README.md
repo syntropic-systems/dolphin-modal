@@ -119,9 +119,9 @@ curl https://your-app--debug-memory.modal.run
 
 **GPU Configuration**: NVIDIA L4 with Memory Snapshots
 - **Cold Start Time**: 2-3s (with snapshots) vs 20-30s (without)
-- **Processing Speed**: ~10.2s per page (including model inference)
-- **Throughput**: 0.46 pages/second effective (burst traffic)
-- **Cost**: $0.0106 per page @ $1.10/hour L4 pricing
+- **Processing Speed**: ~14.7s per page (including model inference)
+- **Throughput**: 0.17 pages/second effective (burst traffic)
+- **Cost**: $0.0045 per page @ $1.10/hour L4 pricing
 
 **Real-World Burst Performance (20 pages simultaneously)**:
 ```
@@ -129,20 +129,20 @@ curl https://your-app--debug-memory.modal.run
 ┌─────────────────────────────┬─────────────────────────────┐
 │ Metric                      │ Value                       │
 ├─────────────────────────────┼─────────────────────────────┤
-│ Total Processing Time       │ 43.26 seconds               │
-│ Containers Utilized         │ 10 containers               │
-│ Parallelization Efficiency  │ 4.7x (excellent)           │
-│ Cost per Page              │ $0.0106                     │
+│ Total GPU Compute Time      │ 294.23 seconds              │
+│ Wall Clock Time             │ 116.58 seconds              │
+│ Parallelization Efficiency  │ 2.5x                        │
+│ Cost per Page              │ $0.0045                     │
+│ Total Cost (20 pages)      │ $0.0899                     │
 │ Success Rate               │ 100% (20/20 pages)         │
-│ Cold Start Penalty         │ ~11s average                │
 │ Memory Snapshots           │ ✅ Enabled (fast restarts)  │
 └─────────────────────────────┴─────────────────────────────┘
 ```
 
 **Scaling Projections**:
-- **100-page document**: ~1.7 minutes, $1.06 cost
-- **500-page document**: ~8.5 minutes, $5.29 cost  
-- **1000-page document**: ~17.1 minutes, $10.58 cost
+- **100-page document**: ~24.5 minutes, $0.45 cost
+- **500-page document**: ~122.6 minutes, $2.25 cost  
+- **1000-page document**: ~245.2 minutes, $4.50 cost
 
 **Modal Architecture Benefits**:
 - **GPU Acceleration**: NVIDIA L4 optimized for cost/performance
