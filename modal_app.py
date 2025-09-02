@@ -197,6 +197,54 @@ class DolphinParser:
             "model_loaded": hasattr(self, 'model')
         }
     
+    @modal.fastapi_endpoint(method="GET")
+    def debug_memory(self) -> dict:
+        """Debug GPU memory usage and calculate possible model instances"""
+        import torch
+        
+        if not torch.cuda.is_available():
+            return {"error": "CUDA not available"}
+        
+        # Get GPU memory info
+        device = torch.cuda.current_device()
+        total_memory = torch.cuda.get_device_properties(device).total_memory
+        allocated_memory = torch.cuda.memory_allocated(device)
+        cached_memory = torch.cuda.memory_reserved(device)
+        free_memory = total_memory - cached_memory
+        
+        # Convert to GB
+        total_gb = total_memory / (1024**3)
+        allocated_gb = allocated_memory / (1024**3)
+        cached_gb = cached_memory / (1024**3)
+        free_gb = free_memory / (1024**3)
+        used_gb = cached_gb  # Used memory (allocated + cached)
+        
+        # Estimate model memory usage
+        model_params = 0
+        model_memory_gb = 0
+        if hasattr(self, 'model'):
+            model_params = sum(p.numel() for p in self.model.model.parameters())
+            # Rough estimate: FP16 = 2 bytes per param + overhead
+            model_memory_gb = (model_params * 2) / (1024**3) * 1.5  # 1.5x for overhead
+        
+        # Calculate how many instances could fit
+        available_for_models = free_gb + (used_gb - model_memory_gb) if model_memory_gb > 0 else free_gb
+        possible_instances = int(available_for_models / model_memory_gb) if model_memory_gb > 0 else 0
+        
+        return {
+            "device": f"cuda:{device}",
+            "total_gb": round(total_gb, 2),
+            "allocated_gb": round(allocated_gb, 2), 
+            "cached_gb": round(cached_gb, 2),
+            "free_gb": round(free_gb, 2),
+            "used_gb": round(used_gb, 2),
+            "model_loaded": hasattr(self, 'model'),
+            "model_params": model_params,
+            "estimated_model_memory_gb": round(model_memory_gb, 2),
+            "possible_instances": max(1, possible_instances),  # At least current instance
+            "memory_efficiency": f"{(used_gb/total_gb)*100:.1f}%"
+        }
+    
     @modal.exit()
     def shutdown_model(self):
         """Clean up when container shuts down"""

@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # API endpoints
 API_URL = 'https://abhishekgautam011--dolphin-parser-dolphinparser-parse.modal.run'
 HEALTH_URL = 'https://abhishekgautam011--dolphin-parser-dolphinparser-health.modal.run'
+DEBUG_URL = 'https://abhishekgautam011--dolphin-parser-dolphinparser-debug-memory.modal.run'
 
 def process_image(image_path, request_num):
     """Process a single image and return timing info"""
@@ -56,9 +57,33 @@ def process_image(image_path, request_num):
             'error': str(e)
         }
 
+def get_memory_usage():
+    """Get GPU memory usage from deployed model"""
+    try:
+        response = requests.get(DEBUG_URL, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"Debug endpoint failed: {response.text}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 def run_benchmark(num_requests=10, concurrent=3):
     """Run benchmark with specified number of requests"""
     print(f"🚀 Starting benchmark: {num_requests} requests with {concurrent} concurrent connections")
+    print("=" * 60)
+    
+    # First check memory usage
+    print("🔍 Checking GPU memory usage...")
+    memory_info = get_memory_usage()
+    if "error" not in memory_info:
+        print(f"📊 GPU Memory Info:")
+        print(f"   Used: {memory_info.get('used_gb', 0):.2f} GB")
+        print(f"   Total: {memory_info.get('total_gb', 0):.2f} GB") 
+        print(f"   Free: {memory_info.get('free_gb', 0):.2f} GB")
+        print(f"   Model instances possible: {memory_info.get('possible_instances', 'Unknown')}")
+    else:
+        print(f"⚠️  Could not get memory info: {memory_info.get('error', 'Unknown')}")
     print("=" * 60)
     
     # Get test images
@@ -166,11 +191,63 @@ def run_benchmark(num_requests=10, concurrent=3):
             throughput = workers / avg_processing_time
             print(f"{workers:2d} workers: {wall_hours:6.2f} hours, {throughput:6.2f} pages/sec")
         
-        print(f"\n💡 NOTES:")
-        print(f"• Modal charges only for actual GPU usage time")
-        print(f"• Container warm-up time is minimal after first request")
-        print(f"• Auto-scaling handles traffic bursts efficiently")
-        print(f"• Cost remains ~${gpu_cost:.2f} regardless of parallelism level")
+        # Optimization potential analysis
+        print(f"\n" + "=" * 60)
+        print("🚀 OPTIMIZATION POTENTIAL (A100-40GB)")
+        print("=" * 60)
+        
+        # Get memory info again to show optimization potential
+        memory_info = get_memory_usage()
+        if "error" not in memory_info:
+            model_memory = memory_info.get('estimated_model_memory_gb', 4.0)  # Default estimate
+            possible_instances = memory_info.get('possible_instances', 1)
+            
+            print(f"Current model memory usage: {model_memory:.2f} GB")
+            print(f"Possible model instances on A100-40GB: {possible_instances}")
+            
+            # Calculate optimization scenarios
+            if possible_instances > 1:
+                # Scenario 1: Multiple model instances with batching
+                optimized_time = avg_processing_time / possible_instances
+                optimized_cost = (optimized_time * 1000 * gpu_cost_per_second)
+                cost_reduction = ((gpu_cost - optimized_cost) / gpu_cost) * 100
+                
+                print(f"\n📈 MULTI-INSTANCE OPTIMIZATION:")
+                print(f"   With {possible_instances} model instances:")
+                print(f"   Processing time per page: {optimized_time:.2f}s (vs {avg_processing_time:.2f}s)")
+                print(f"   Cost for 1000 pages: ${optimized_cost:.2f} (vs ${gpu_cost:.2f})")
+                print(f"   Cost reduction: {cost_reduction:.1f}%")
+                print(f"   Throughput: {possible_instances/avg_processing_time:.2f} pages/sec")
+                
+                # Theoretical batch processing
+                batch_sizes = [8, 16, 32]
+                print(f"\n📦 BATCH PROCESSING POTENTIAL:")
+                for batch_size in batch_sizes:
+                    # Estimate batch speedup (not linear, diminishing returns)
+                    batch_speedup = min(batch_size * 0.7, batch_size)  # 70% efficiency
+                    batch_time = avg_processing_time / batch_speedup
+                    batch_throughput = batch_size / avg_processing_time
+                    batch_cost = (batch_time * 1000 * gpu_cost_per_second) / batch_size
+                    
+                    print(f"   Batch size {batch_size:2d}: {batch_time:.2f}s/page, {batch_throughput:.2f} pages/sec, ${batch_cost:.4f}/page")
+        
+        # Compare with Mistral's pricing
+        mistral_cost_per_page = 0.001  # $1 per 1000 pages
+        current_cost_per_page = gpu_cost / 1000
+        cost_gap = current_cost_per_page / mistral_cost_per_page
+        
+        print(f"\n💰 COST COMPARISON:")
+        print(f"Current cost per page: ${current_cost_per_page:.4f}")
+        print(f"Mistral cost per page: ${mistral_cost_per_page:.4f}")
+        print(f"Cost gap: {cost_gap:.1f}x more expensive")
+        print(f"Target optimization needed: {cost_gap:.1f}x speedup or memory efficiency")
+
+        print(f"\n💡 OPTIMIZATION NOTES:")
+        print(f"• Current setup uses single model instance per container")
+        print(f"• A100-40GB can potentially fit {memory_info.get('possible_instances', '?')} model instances")
+        print(f"• Batch processing could provide 5-10x speedup for multiple pages")
+        print(f"• INT8 quantization could double model instances (2x memory savings)")
+        print(f"• Dynamic batching + multi-instance = path to Mistral-level pricing")
         
         return {
             'total_requests': num_requests,
