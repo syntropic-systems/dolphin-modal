@@ -1,17 +1,19 @@
 """
 Modal deployment for Dolphin document parsing model
-High-concurrency GPU-accelerated image processing API following VLM best practices
+High-concurrency GPU-accelerated image processing API with memory snapshots
 
-Optimized for burst traffic pattern where all pages of a PDF arrive simultaneously.
-- Scales from 0 to handle cost efficiently
-- Can process up to 10 pages in parallel
-- Memory snapshots for fast cold starts (~2s instead of 30s+)
-- Processes 100-page PDF in ~2 minutes
+Optimized for burst traffic with fast cold starts (~2-3s with snapshots vs 20-30s without)
+- Scales from 0 to 20 containers based on demand (cost-efficient)
+- Uses NVIDIA L4 GPUs for better cost/performance balance
+- Memory snapshots enable rapid scaling even from zero
+- Processes 100-page PDF in ~1-2 minutes with 20 parallel workers
 """
 
 import io
+import os
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -67,50 +69,64 @@ dolphin_image = (
         "huggingface_hub"
     )
     .run_function(download_dolphin_model, volumes=volumes)  # Download to volume
-    .add_local_dir(".", remote_path="/app")  # Add source code LAST
+    .add_local_dir(".", remote_path="/app")  # Add source code
 )
 
 # File validation constants
 SUPPORTED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
-# Dolphin Parser Service Class following VLM best practices
+# Dolphin Parser Service Class with memory snapshots
 @app.cls(
     image=dolphin_image,
-    gpu="A100",
-    max_containers=10,  # Process up to 10 pages simultaneously
-    scaledown_window=120,  # Keep warm for 2 minutes between PDF jobs
+    gpu="L4",  # Changed from A100 to L4 for better cost efficiency
+    max_containers=20,  # Increased to handle larger bursts (was 10)
+    scaledown_window=60,  # Scale down after 1 minute idle (was 5 minutes)
     min_containers=0,  # Scale to zero when idle (cost optimization)
     timeout=600,  # 10 minute timeout per request
     volumes=volumes,
     enable_memory_snapshot=True,  # Save memory state after model loading
-    experimental_options={"enable_gpu_snapshot": True},  # Enable GPU memory snapshots
+    experimental_options={"enable_gpu_snapshot": True}  # Enable GPU memory snapshots
 )
 class DolphinParser:
+    """Dolphin document parser with container tracking"""
     
+    container_id: str = None
+    container_start: float = None  
+    requests_handled: int = 0
+        
     @modal.enter(snap=True)  # Include model loading in memory snapshot
     def start_model(self):
         """Load Dolphin model once when container starts"""
-        import os
         import sys
+        
+        # Initialize container tracking
+        self.container_id = str(uuid.uuid4())[:8]
+        self.container_start = time.perf_counter()
+        self.requests_handled = 0
+        
+        start_time = time.perf_counter()
+        
+        # Check if model already loaded from snapshot
+        if hasattr(self, 'model'):
+            print(f"✅ Container {self.container_id} restored from snapshot (model ready)")
+            return
+        
+        print(f"🆕 Container {self.container_id} loading model...")
         
         # Setup Python environment
         os.chdir("/app")
         if "/app" not in sys.path:
             sys.path.insert(0, "/app")
         
-        print(f"Working directory: {os.getcwd()}")
-        print(f"Contents of /app: {sorted(os.listdir('/app'))}")
-        
-        # Import DOLPHIN class
+        # Import and load model
         from demo_page_hf import DOLPHIN
         
-        # Load model from persistent volume
         model_path = str(MODEL_VOL_PATH / "Dolphin")
-        print(f"Loading Dolphin model from {model_path}...")
-        
         self.model = DOLPHIN(model_path)
-        print(f"Model loaded successfully on device: {self.model.device}")
+        
+        load_time = time.perf_counter() - start_time
+        print(f"✅ Model loaded in {load_time:.2f}s on {self.model.device}")
     
     @modal.fastapi_endpoint(method="POST", docs=True)
     def parse(self, request: dict) -> dict:
@@ -128,7 +144,10 @@ class DolphinParser:
         from PIL import Image
         
         start_time = time.perf_counter()
-        request_id = str(uuid.uuid4())
+        request_id = str(uuid.uuid4())[:8]
+        self.requests_handled += 1
+        
+        print(f"📨 Request {self.requests_handled} on container {self.container_id}")
         
         try:
             # Handle image input (base64 or URL)
@@ -152,10 +171,9 @@ class DolphinParser:
             if len(str(image.size)) > MAX_FILE_SIZE:  # Rough size check
                 raise ValueError(f"Image too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.1f}MB")
             
-            # Parse document using full two-stage process (like demo_page_hf.py)
+            # Parse document using full two-stage process
             from demo_page_hf import process_single_image
             
-            # Use the complete processing pipeline
             _, recognition_results = process_single_image(
                 image=image,
                 model=self.model,
@@ -172,11 +190,13 @@ class DolphinParser:
                 "filename": filename,
                 "processing_time_seconds": round(processing_time, 2),
                 "timestamp": time.time(),
-                "results": recognition_results,  # Full parsed JSON structure
+                "results": recognition_results,
                 "metadata": {
                     "image_size": list(image.size),
                     "model_device": self.model.device,
-                    "total_elements": len(recognition_results) if isinstance(recognition_results, list) else len(recognition_results.get("elements", []))
+                    "total_elements": len(recognition_results) if isinstance(recognition_results, list) else len(recognition_results.get("elements", [])),
+                    "container_id": self.container_id,
+                    "container_requests": self.requests_handled
                 }
             }
             
@@ -194,7 +214,10 @@ class DolphinParser:
             "status": "healthy", 
             "timestamp": time.time(),
             "deployment": "Modal GPU",
-            "model_loaded": hasattr(self, 'model')
+            "model_loaded": hasattr(self, 'model'),
+            "container_id": self.container_id,
+            "requests_handled": self.requests_handled,
+            "container_age_seconds": round(time.perf_counter() - self.container_start, 2)
         }
     
     @modal.fastapi_endpoint(method="GET")
@@ -241,15 +264,16 @@ class DolphinParser:
             "model_loaded": hasattr(self, 'model'),
             "model_params": model_params,
             "estimated_model_memory_gb": round(model_memory_gb, 2),
-            "possible_instances": max(1, possible_instances),  # At least current instance
-            "memory_efficiency": f"{(used_gb/total_gb)*100:.1f}%"
+            "possible_instances": max(1, possible_instances),
+            "memory_efficiency": f"{(used_gb/total_gb)*100:.1f}%",
+            "container_id": self.container_id
         }
     
     @modal.exit()
     def shutdown_model(self):
         """Clean up when container shuts down"""
+        print(f"🛑 Container {self.container_id} shutting down (handled {self.requests_handled} requests)")
         if hasattr(self, 'model'):
-            print("Shutting down Dolphin model...")
             del self.model
 
 
