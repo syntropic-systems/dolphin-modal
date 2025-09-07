@@ -79,8 +79,8 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 # Dolphin Parser Service Class with memory snapshots
 @app.cls(
     image=dolphin_image,
-    gpu="L4",  # Changed from A100 to L4 for better cost efficiency
-    max_containers=20,  # Increased to handle larger bursts (was 10)
+    gpu="T4",  # Changed from A100 to L4 for better cost efficiency
+    max_containers=2,  # Increased to handle larger bursts (was 10)
     scaledown_window=60,  # Scale down after 1 minute idle (was 5 minutes)
     min_containers=0,  # Scale to zero when idle (cost optimization)
     timeout=600,  # 10 minute timeout per request
@@ -128,6 +128,102 @@ class DolphinParser:
         load_time = time.perf_counter() - start_time
         print(f"✅ Model loaded in {load_time:.2f}s on {self.model.device}")
     
+    @modal.fastapi_endpoint(method="POST", docs=True)  
+    def parse_batch(self, request: dict) -> dict:
+        """
+        BATCH PROCESSING: Parse multiple document images in one GPU-optimized call
+        
+        Args:
+            request: JSON with array of images: {"images": [{"image_data": "base64...", "filename": "page1.jpg"}, ...]}
+        
+        Returns:
+            JSON response with results for all images: {"results": [{"filename": "page1.jpg", "elements": [...]}]}
+        """
+        import base64
+        from PIL import Image
+        
+        start_time = time.perf_counter()
+        batch_id = str(uuid.uuid4())[:8]
+        self.requests_handled += 1
+        
+        try:
+            images_data = request.get("images", [])
+            if not images_data:
+                raise ValueError("'images' array is required")
+            
+            if len(images_data) > 50:  # Limit batch size for memory management
+                raise ValueError(f"Batch size limited to 50 images, received {len(images_data)}")
+            
+            print(f"📦 BATCH {batch_id}: Processing {len(images_data)} images on container {self.container_id}")
+            
+            # Prepare images and paths for batch processing
+            pil_images = []
+            image_paths = []
+            filenames = []
+            
+            for i, img_data in enumerate(images_data):
+                if "image_data" not in img_data:
+                    raise ValueError(f"Image {i}: 'image_data' is required")
+                
+                # Decode base64 image
+                image_data = base64.b64decode(img_data["image_data"])
+                pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
+                filename = img_data.get("filename", f"batch_image_{i}.jpg")
+                
+                pil_images.append(pil_image)
+                image_paths.append(f"batch_{batch_id}_{i}")  # Temporary paths for processing
+                filenames.append(filename)
+            
+            # Use the CUDA-optimized batch processing function
+            from demo_page_hf import batch_detect_all_elements_pil
+            
+            batch_results = batch_detect_all_elements_pil(
+                images=pil_images, 
+                image_names=image_paths,
+                model=self.model, 
+                max_batch_size=32  # Optimize for GPU memory
+            )
+            
+            # Format results for response
+            formatted_results = []
+            for i, (image_path, elements) in enumerate(batch_results.items()):
+                formatted_results.append({
+                    "filename": filenames[i],
+                    "elements": elements,
+                    "element_count": len(elements)
+                })
+            
+            processing_time = time.perf_counter() - start_time
+            total_elements = sum(len(result["elements"]) for result in formatted_results)
+            
+            print(f"✅ BATCH {batch_id}: {total_elements} elements from {len(images_data)} images in {processing_time:.2f}s")
+            
+            return {
+                "batch_id": batch_id,
+                "processing_time_seconds": round(processing_time, 2),
+                "timestamp": time.time(),
+                "images_processed": len(images_data),
+                "total_elements": total_elements,
+                "results": formatted_results,
+                "metadata": {
+                    "model_device": self.model.device,
+                    "container_id": self.container_id,
+                    "container_requests": self.requests_handled,
+                    "batch_throughput": round(len(images_data) / processing_time, 2),
+                    "elements_per_second": round(total_elements / processing_time, 2)
+                }
+            }
+            
+        except Exception as e:
+            error_time = time.perf_counter() - start_time
+            print(f"❌ BATCH {batch_id}: Error after {error_time:.2f}s - {str(e)}")
+            return {
+                "batch_id": batch_id,
+                "error": str(e),
+                "status": "failed",
+                "processing_time_seconds": round(error_time, 2)
+            }
+
     @modal.fastapi_endpoint(method="POST", docs=True)
     def parse(self, request: dict) -> dict:
         """
@@ -275,38 +371,3 @@ class DolphinParser:
         print(f"🛑 Container {self.container_id} shutting down (handled {self.requests_handled} requests)")
         if hasattr(self, 'model'):
             del self.model
-
-
-@app.local_entrypoint()
-def main():
-    """Local entrypoint for testing the deployed service"""
-    import json
-    import urllib.request
-    import base64
-    
-    parser = DolphinParser()
-    
-    # Test with a sample image (convert to base64)
-    test_image_path = Path("demo/page_imgs/page_1.jpeg") 
-    if test_image_path.exists():
-        with open(test_image_path, "rb") as f:
-            image_data = base64.b64encode(f.read()).decode()
-        
-        payload = json.dumps({
-            "image_data": image_data,
-            "filename": "page_1.jpeg"
-        })
-        
-        print("Testing Dolphin parser...")
-        req = urllib.request.Request(
-            parser.parse.get_web_url(),
-            data=payload.encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        
-        with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode())
-            print("Response:", result)
-    else:
-        print("Test image not found, skipping test")

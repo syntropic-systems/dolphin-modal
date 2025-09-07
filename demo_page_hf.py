@@ -314,6 +314,326 @@ def process_element_batch(elements, model, prompt, max_batch_size=None):
     return results
 
 
+def batch_detect_all_elements(image_paths, model, max_batch_size=16):
+    """
+    CUDA-optimized batch processing: detect all elements from multiple images in parallel.
+    
+    This function leverages the existing chat() batching capability to maximize GPU utilization:
+    1. Batch layout detection across all images
+    2. Batch element recognition across all detected elements
+    
+    Args:
+        image_paths: List of image file paths
+        model: DOLPHIN model instance (with batching support via chat())
+        max_batch_size: Maximum elements per batch for GPU memory optimization
+        
+    Returns:
+        Dict mapping image_path -> list of detected elements 
+        Each element: {"label": str, "bbox": [x1,y1,x2,y2], "text": str, "reading_order": int}
+    """
+    if not image_paths:
+        return {}
+        
+    print(f"Batch processing {len(image_paths)} images with max_batch_size={max_batch_size}")
+    
+    # Load all images and prepare them
+    images = []
+    image_dims = []
+    padded_images = []
+    
+    for img_path in image_paths:
+        pil_image = Image.open(img_path).convert("RGB")
+        images.append(pil_image)
+        padded_img, dims = prepare_image(pil_image)
+        padded_images.append(padded_img)
+        image_dims.append(dims)
+    
+    # Stage 1: Batch layout detection for ALL images in one GPU call
+    layout_prompts = ["Parse the reading order of this document."] * len(images)
+    start_time = time.perf_counter()
+    layout_outputs = model.chat(layout_prompts, images)
+    stage1_time = time.perf_counter() - start_time
+    print(f"Stage 1 (Layout): {len(images)} images processed in {stage1_time:.2f}s")
+    
+    # Stage 2: Extract all elements across all images and batch process them
+    all_text_elements = []
+    all_table_elements = []  
+    results_by_image = {}
+    
+    # Process layout results and collect all elements
+    for idx, (img_path, layout_output, padded_image, dims) in enumerate(zip(image_paths, layout_outputs, padded_images, image_dims)):
+        layout_results = parse_layout_string(layout_output)
+        figure_results = []
+        previous_box = None
+        reading_order = 0
+        
+        for bbox, label in layout_results:
+            try:
+                x1, y1, x2, y2, orig_x1, orig_y1, orig_x2, orig_y2, previous_box = process_coordinates(
+                    bbox, padded_image, dims, previous_box
+                )
+                
+                cropped = padded_image[y1:y2, x1:x2]
+                if cropped.size > 0 and cropped.shape[0] > 3 and cropped.shape[1] > 3:
+                    if label == "fig":
+                        # Handle figures immediately (no GPU processing needed)
+                        figure_results.append({
+                            "label": label,
+                            "bbox": [orig_x1, orig_y1, orig_x2, orig_y2],
+                            "text": "[Figure]",
+                            "reading_order": reading_order,
+                        })
+                    else:
+                        # Collect for batch processing
+                        pil_crop = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                        element_info = {
+                            "crop": pil_crop,
+                            "label": label,
+                            "bbox": [orig_x1, orig_y1, orig_x2, orig_y2],
+                            "reading_order": reading_order,
+                            "image_path": img_path,
+                        }
+                        
+                        if label == "tab":
+                            all_table_elements.append(element_info)
+                        else:
+                            all_text_elements.append(element_info)
+                
+                reading_order += 1
+                
+            except Exception as e:
+                print(f"Error processing element in {img_path}: {str(e)}")
+                continue
+        
+        results_by_image[img_path] = figure_results
+    
+    # Batch process all text elements across ALL images
+    if all_text_elements:
+        start_time = time.perf_counter()
+        crops_list = [elem["crop"] for elem in all_text_elements]
+        prompts_list = ["Read text in the image."] * len(crops_list)
+        
+        # Process in chunks to manage GPU memory
+        for i in range(0, len(all_text_elements), max_batch_size):
+            end_idx = min(i + max_batch_size, len(all_text_elements))
+            batch_crops = crops_list[i:end_idx]
+            batch_prompts = prompts_list[i:end_idx]
+            batch_elements = all_text_elements[i:end_idx]
+            
+            # Single GPU batch call
+            batch_results = model.chat(batch_prompts, batch_crops)
+            
+            # Distribute results back to their images
+            for j, result in enumerate(batch_results):
+                elem = batch_elements[j]
+                img_path = elem["image_path"]
+                results_by_image[img_path].append({
+                    "label": elem["label"],
+                    "bbox": elem["bbox"],
+                    "text": result.strip(),
+                    "reading_order": elem["reading_order"],
+                })
+        
+        text_time = time.perf_counter() - start_time
+        print(f"Stage 2a (Text): {len(all_text_elements)} elements processed in {text_time:.2f}s")
+    
+    # Batch process all table elements across ALL images  
+    if all_table_elements:
+        start_time = time.perf_counter()
+        crops_list = [elem["crop"] for elem in all_table_elements]
+        prompts_list = ["Parse the table in the image."] * len(crops_list)
+        
+        # Process in chunks to manage GPU memory
+        for i in range(0, len(all_table_elements), max_batch_size):
+            end_idx = min(i + max_batch_size, len(all_table_elements))
+            batch_crops = crops_list[i:end_idx]
+            batch_prompts = prompts_list[i:end_idx]
+            batch_elements = all_table_elements[i:end_idx]
+            
+            # Single GPU batch call
+            batch_results = model.chat(batch_prompts, batch_crops)
+            
+            # Distribute results back to their images
+            for j, result in enumerate(batch_results):
+                elem = batch_elements[j]
+                img_path = elem["image_path"]
+                results_by_image[img_path].append({
+                    "label": elem["label"],
+                    "bbox": elem["bbox"],
+                    "text": result.strip(),
+                    "reading_order": elem["reading_order"],
+                })
+        
+        table_time = time.perf_counter() - start_time
+        print(f"Stage 2b (Tables): {len(all_table_elements)} elements processed in {table_time:.2f}s")
+    
+    # Sort elements within each image by reading order
+    for img_path in results_by_image:
+        results_by_image[img_path].sort(key=lambda x: x.get("reading_order", 0))
+    
+    total_elements = sum(len(results) for results in results_by_image.values())
+    print(f"Completed: {total_elements} total elements from {len(image_paths)} images")
+    
+    return results_by_image
+
+
+def batch_detect_all_elements_pil(images, image_names, model, max_batch_size=16):
+    """
+    PIL image version for Modal deployment: detect all elements from PIL images in parallel.
+    
+    Args:
+        images: List of PIL Image objects
+        image_names: List of image names/identifiers
+        model: DOLPHIN model instance (with batching support via chat())
+        max_batch_size: Maximum elements per batch for GPU memory optimization
+        
+    Returns:
+        Dict mapping image_name -> list of detected elements 
+        Each element: {"label": str, "bbox": [x1,y1,x2,y2], "text": str, "reading_order": int}
+    """
+    if not images:
+        return {}
+        
+    print(f"Batch processing {len(images)} PIL images with max_batch_size={max_batch_size}")
+    
+    # Prepare all images
+    image_dims = []
+    padded_images = []
+    
+    for pil_image in images:
+        padded_img, dims = prepare_image(pil_image)
+        padded_images.append(padded_img)
+        image_dims.append(dims)
+    
+    # Stage 1: Batch layout detection for ALL images in one GPU call
+    layout_prompts = ["Parse the reading order of this document."] * len(images)
+    start_time = time.perf_counter()
+    layout_outputs = model.chat(layout_prompts, images)
+    stage1_time = time.perf_counter() - start_time
+    print(f"Stage 1 (Layout): {len(images)} images processed in {stage1_time:.2f}s")
+    
+    # Stage 2: Extract all elements across all images and batch process them
+    all_text_elements = []
+    all_table_elements = []  
+    results_by_image = {}
+    
+    # Process layout results and collect all elements
+    for idx, (img_name, layout_output, padded_image, dims) in enumerate(zip(image_names, layout_outputs, padded_images, image_dims)):
+        layout_results = parse_layout_string(layout_output)
+        figure_results = []
+        previous_box = None
+        reading_order = 0
+        
+        for bbox, label in layout_results:
+            try:
+                x1, y1, x2, y2, orig_x1, orig_y1, orig_x2, orig_y2, previous_box = process_coordinates(
+                    bbox, padded_image, dims, previous_box
+                )
+                
+                cropped = padded_image[y1:y2, x1:x2]
+                if cropped.size > 0 and cropped.shape[0] > 3 and cropped.shape[1] > 3:
+                    if label == "fig":
+                        # Handle figures immediately (no GPU processing needed)
+                        figure_results.append({
+                            "label": label,
+                            "bbox": [orig_x1, orig_y1, orig_x2, orig_y2],
+                            "text": "[Figure]",
+                            "reading_order": reading_order,
+                        })
+                    else:
+                        # Collect for batch processing
+                        pil_crop = Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                        element_info = {
+                            "crop": pil_crop,
+                            "label": label,
+                            "bbox": [orig_x1, orig_y1, orig_x2, orig_y2],
+                            "reading_order": reading_order,
+                            "image_name": img_name,
+                        }
+                        
+                        if label == "tab":
+                            all_table_elements.append(element_info)
+                        else:
+                            all_text_elements.append(element_info)
+                
+                reading_order += 1
+                
+            except Exception as e:
+                print(f"Error processing element in {img_name}: {str(e)}")
+                continue
+        
+        results_by_image[img_name] = figure_results
+    
+    # Batch process all text elements across ALL images
+    if all_text_elements:
+        start_time = time.perf_counter()
+        crops_list = [elem["crop"] for elem in all_text_elements]
+        prompts_list = ["Read text in the image."] * len(crops_list)
+        
+        # Process in chunks to manage GPU memory
+        for i in range(0, len(all_text_elements), max_batch_size):
+            end_idx = min(i + max_batch_size, len(all_text_elements))
+            batch_crops = crops_list[i:end_idx]
+            batch_prompts = prompts_list[i:end_idx]
+            batch_elements = all_text_elements[i:end_idx]
+            
+            # Single GPU batch call
+            batch_results = model.chat(batch_prompts, batch_crops)
+            
+            # Distribute results back to their images
+            for j, result in enumerate(batch_results):
+                elem = batch_elements[j]
+                img_name = elem["image_name"]
+                results_by_image[img_name].append({
+                    "label": elem["label"],
+                    "bbox": elem["bbox"],
+                    "text": result.strip(),
+                    "reading_order": elem["reading_order"],
+                })
+        
+        text_time = time.perf_counter() - start_time
+        print(f"Stage 2a (Text): {len(all_text_elements)} elements processed in {text_time:.2f}s")
+    
+    # Batch process all table elements across ALL images  
+    if all_table_elements:
+        start_time = time.perf_counter()
+        crops_list = [elem["crop"] for elem in all_table_elements]
+        prompts_list = ["Parse the table in the image."] * len(crops_list)
+        
+        # Process in chunks to manage GPU memory
+        for i in range(0, len(all_table_elements), max_batch_size):
+            end_idx = min(i + max_batch_size, len(all_table_elements))
+            batch_crops = crops_list[i:end_idx]
+            batch_prompts = prompts_list[i:end_idx]
+            batch_elements = all_table_elements[i:end_idx]
+            
+            # Single GPU batch call
+            batch_results = model.chat(batch_prompts, batch_crops)
+            
+            # Distribute results back to their images
+            for j, result in enumerate(batch_results):
+                elem = batch_elements[j]
+                img_name = elem["image_name"]
+                results_by_image[img_name].append({
+                    "label": elem["label"],
+                    "bbox": elem["bbox"],
+                    "text": result.strip(),
+                    "reading_order": elem["reading_order"],
+                })
+        
+        table_time = time.perf_counter() - start_time
+        print(f"Stage 2b (Tables): {len(all_table_elements)} elements processed in {table_time:.2f}s")
+    
+    # Sort elements within each image by reading order
+    for img_name in results_by_image:
+        results_by_image[img_name].sort(key=lambda x: x.get("reading_order", 0))
+    
+    total_elements = sum(len(results) for results in results_by_image.values())
+    print(f"Completed: {total_elements} total elements from {len(images)} images")
+    
+    return results_by_image
+
+
 def main():
     parser = argparse.ArgumentParser(description="Document parsing based on DOLPHIN")
     parser.add_argument("--model_path", default="./hf_model", help="Path to Hugging Face model")
