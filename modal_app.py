@@ -72,15 +72,21 @@ dolphin_image = (
     .add_local_dir(".", remote_path="/app")  # Add source code
 )
 
-# File validation constants
+# Configuration constants
 SUPPORTED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB per individual image
+
+# T4 GPU Batch Processing Configuration
+MAX_BATCH_SIZE = 32          # Maximum images per batch request (T4 GPU optimized)
+ELEMENT_BATCH_SIZE = 32      # Maximum elements per GPU inference call
+GPU_TYPE = "T4"              # GPU type (T4: 16GB VRAM, cost-optimized)
+MAX_CONTAINERS = 4           # Scale up to 4 containers for burst traffic
 
 # Dolphin Parser Service Class with memory snapshots
 @app.cls(
     image=dolphin_image,
-    gpu="T4",  # Changed from A100 to L4 for better cost efficiency
-    max_containers=2,  # Increased to handle larger bursts (was 10)
+    gpu=GPU_TYPE,  # T4 GPU: 16GB VRAM, optimized for cost/performance
+    max_containers=MAX_CONTAINERS,  # Scale up for burst traffic
     scaledown_window=60,  # Scale down after 1 minute idle (was 5 minutes)
     min_containers=0,  # Scale to zero when idle (cost optimization)
     timeout=600,  # 10 minute timeout per request
@@ -151,8 +157,9 @@ class DolphinParser:
             if not images_data:
                 raise ValueError("'images' array is required")
             
-            if len(images_data) > 50:  # Limit batch size for memory management
-                raise ValueError(f"Batch size limited to 50 images, received {len(images_data)}")
+            # T4 GPU Memory Optimization: Validate batch size
+            if len(images_data) > MAX_BATCH_SIZE:
+                raise ValueError(f"Batch size limited to {MAX_BATCH_SIZE} images for {GPU_TYPE} GPU optimization, received {len(images_data)}")
             
             print(f"📦 BATCH {batch_id}: Processing {len(images_data)} images on container {self.container_id}")
             
@@ -181,7 +188,7 @@ class DolphinParser:
                 images=pil_images, 
                 image_names=image_paths,
                 model=self.model, 
-                max_batch_size=32  # Optimize for GPU memory
+                max_batch_size=ELEMENT_BATCH_SIZE  # T4 GPU element processing optimization
             )
             
             # Format results for response

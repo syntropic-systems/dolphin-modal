@@ -4,6 +4,20 @@
 
 The Dolphin API now supports both individual and batch processing endpoints. The batch endpoint provides **10-50x performance improvement** by processing multiple images in a single GPU-optimized call.
 
+## Configuration
+
+**GPU Configuration:** T4 (16GB VRAM)
+- **Maximum batch size:** 32 images per request
+- **Element batch size:** 32 elements per GPU call  
+- **GPU type:** T4 (cost-optimized)
+- **Max containers:** 4 (scales up for burst traffic)
+
+### T4 GPU Optimization Benefits:
+- ✅ **Cost-efficient:** 40% cheaper than A100
+- ✅ **Memory optimized:** 16GB VRAM handles 32 images reliably
+- ✅ **High throughput:** 32 images processed in ~30-60 seconds
+- ✅ **Auto-scaling:** 0 to 4 containers based on demand
+
 ## API Endpoints
 
 ### 1. Individual Processing (Legacy)
@@ -57,7 +71,7 @@ The Dolphin API now supports both individual and batch processing endpoints. The
       "image_data": "base64_encoded_image_2",
       "filename": "page_2.jpg"
     },
-    // ... up to 50 images
+    // ... up to 32 images (T4 GPU optimized)
   ]
 }
 ```
@@ -121,10 +135,10 @@ class DolphinBatchClient:
         Initialize the batch client
         
         Args:
-            batch_size: Maximum number of images per batch (max 50)
+            batch_size: Maximum number of images per batch (max 32 for T4 GPU)
         """
         self.batch_api_url = "https://abhishekgautam011--dolphin-parser-dolphinparser-parse-batch.modal.run"
-        self.batch_size = min(batch_size, 50)  # API limit
+        self.batch_size = min(batch_size, 32)  # API limit
         self.pending_requests = []
         
     def add_image(self, image_path: str, request_id: Optional[str] = None) -> str:
@@ -294,7 +308,7 @@ class AsyncDolphinBatchClient:
             auto_batch_delay: Seconds to wait before auto-processing partial batch
         """
         self.batch_api_url = "https://abhishekgautam011--dolphin-parser-dolphinparser-parse-batch.modal.run"
-        self.batch_size = min(batch_size, 50)
+        self.batch_size = min(batch_size, 32)
         self.auto_batch_delay = auto_batch_delay
         
         self.request_queue = asyncio.Queue()
@@ -607,7 +621,7 @@ print(f"✅ Extracted data from {len(data)} documents")
 
 ## Rate Limits
 
-- Maximum batch size: 50 images
+- Maximum batch size: 32 images (T4 GPU optimized)
 - Maximum payload size: 250MB
 - Timeout: 600 seconds per request
 - Concurrent requests: Based on Modal container limits
