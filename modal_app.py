@@ -1,12 +1,6 @@
 """
 Modal deployment for Dolphin document parsing model
 High-concurrency GPU-accelerated image processing API with memory snapshots
-
-Optimized for burst traffic with fast cold starts (~2-3s with snapshots vs 20-30s without)
-- Scales from 0 to 20 containers based on demand (cost-efficient)
-- Uses NVIDIA L4 GPUs for better cost/performance balance
-- Memory snapshots enable rapid scaling even from zero
-- Processes 100-page PDF in ~1-2 minutes with 20 parallel workers
 """
 
 import io

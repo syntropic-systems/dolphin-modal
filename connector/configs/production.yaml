@@ -1,0 +1,46 @@
+server:
+  port: ${PORT:-8080}
+  max_connections: 3000
+  read_timeout: 300s     # 5 minutes
+  write_timeout: 300s
+  max_request_size: 52428800  # 50MB
+  rate_limit_per_client: 10   # 10 requests per minute per IP
+  graceful_shutdown_timeout: 30s
+  backpressure_threshold: 2500 # Start rejecting at 83% capacity
+
+queue:
+  redis_url: ${REDIS_URL:-redis://localhost:6379}
+  max_size: 10000        # 10k requests max
+  ttl: 6h               # Request lifetime
+  queue_key: "dolphin:requests"
+  processing_key: "dolphin:processing"
+  max_retry_count: 3     # Max retries per request
+  recovery_interval: 5m  # How often to check for stuck batches
+
+batch_formation:
+  max_batch_size: 32     # T4 GPU limit
+  min_batch_size: 1      # Process single requests immediately
+  check_interval: 50ms   # How often to check for new batches
+
+modal:
+  base_url: ${MODAL_API_ENDPOINT:-https://abhishekgautam011--dolphin-parser-dolphinparser}
+  timeout: 120s          # 2 minutes
+  max_retries: 3
+  retry_delay: 2s
+  max_concurrent_batches: 4  # Match Modal max_containers
+  circuit_breaker:
+    failure_threshold: 5     # Open after 5 failures
+    cooldown_period: 30s     # Stay open for 30s
+    health_check_interval: 10s
+  connection_pool:
+    max_idle_connections: 10
+    idle_connection_timeout: 90s
+
+response:
+  timeout: 15m           # Max time to wait for response
+  cleanup_interval: 5m   # Clean up expired responses
+
+monitoring:
+  enable_metrics: true
+  prometheus_port: 9090
+  log_level: ${LOG_LEVEL:-info}
