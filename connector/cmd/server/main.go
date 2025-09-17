@@ -239,10 +239,10 @@ func (as *AggregationService) GetHealthStatus() map[string]interface{} {
 	// Worker pool metrics
 	metrics := as.workerPool.GetMetrics()
 	status["worker_pool"] = map[string]interface{}{
-		"active_workers": as.workerPool.ActiveWorkers(),
-		"total_tasks":    metrics.TotalTasks,
+		"active_workers":  as.workerPool.ActiveWorkers(),
+		"total_tasks":     metrics.TotalTasks,
 		"completed_tasks": metrics.CompletedTasks,
-		"failed_tasks":   metrics.FailedTasks,
+		"failed_tasks":    metrics.FailedTasks,
 	}
 
 	return status
@@ -253,8 +253,8 @@ func (as *AggregationService) GetQueueStatus() map[string]interface{} {
 	queueDepth := as.queue.Size()
 
 	return map[string]interface{}{
-		"queue_depth":     queueDepth,
-		"max_queue_size":  as.config.Queue.MaxSize,
+		"queue_depth":         queueDepth,
+		"max_queue_size":      as.config.Queue.MaxSize,
 		"utilization_percent": float64(queueDepth) / float64(as.config.Queue.MaxSize) * 100,
 	}
 }

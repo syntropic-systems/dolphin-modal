@@ -35,35 +35,45 @@ def download_dolphin_model():
     )
     print(f"Model downloaded to {model_path}")
 
+pip_packages = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "transformers==4.47.0",
+    "accelerate==1.6.0",
+    "timm==0.5.4",
+    "pillow==9.3.0",
+    "opencv-python-headless==4.11.0.86",
+    "numpy==1.26.4",
+    "omegaconf==2.3.0",
+    "pymupdf==1.26",
+    "fastapi",
+    "python-multipart",
+    "huggingface_hub",
+]
+
 # Define the Modal image with all dependencies
 dolphin_image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry("nvidia/cuda:12.1.1-devel-ubuntu22.04")
     .apt_install(
-        "libgl1-mesa-glx",  # For OpenCV
-        "libglib2.0-0",     # For OpenCV
-        "libsm6",           # For OpenCV
-        "libxext6",         # For OpenCV  
-        "libxrender-dev",   # For OpenCV
-        "libgomp1",         # For OpenMP support
-        "libglib2.0-0"      # For general compatibility
+        "python3-pip",
+        "python-is-python3",
+        "libgl1-mesa-glx",
+        "libglib2.0-0",
+        "libsm6",
+        "libxext6",
+        "libxrender-dev",
+        "libgomp1",
     )
+    # --- THIS IS THE FIX ---
+    # Unpack the list of packages using the * operator
+    # and pass the index URL as a keyword argument.
     .pip_install(
-        "torch==2.8.0",
-        "torchvision==0.23.0", 
-        "transformers==4.47.0",
-        "accelerate==1.6.0",
-        "timm==0.5.4",
-        "pillow==9.3.0",
-        "opencv-python-headless==4.11.0.86",  # Headless version for servers
-        "numpy==1.26.4",
-        "omegaconf==2.3.0",
-        "pymupdf==1.26",
-        "fastapi",
-        "python-multipart",
-        "huggingface_hub"
+        *pip_packages,
+        extra_index_url="https://download.pytorch.org/whl/cu121"
     )
-    .run_function(download_dolphin_model, volumes=volumes)  # Download to volume
-    .add_local_dir(".", remote_path="/app")  # Add source code
+    # -----------------------
+    .run_function(download_dolphin_model, volumes=volumes)
+    .add_local_dir(".", remote_path="/app")
 )
 
 # Configuration constants
@@ -71,9 +81,9 @@ SUPPORTED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG'}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB per individual image
 
 # T4 GPU Batch Processing Configuration
-MAX_BATCH_SIZE = 32          # Maximum images per batch request (T4 GPU optimized)
+MAX_BATCH_SIZE = 32          # Maximum images per batch request (A10 GPU optimized)
 ELEMENT_BATCH_SIZE = 32      # Maximum elements per GPU inference call
-GPU_TYPE = "T4"              # GPU type (T4: 16GB VRAM, cost-optimized)
+GPU_TYPE = "A10"              # GPU type (A10: 24GB VRAM, cost-optimized)
 MAX_CONTAINERS = 4           # Scale up to 4 containers for burst traffic
 
 # Dolphin Parser Service Class with memory snapshots
@@ -81,7 +91,7 @@ MAX_CONTAINERS = 4           # Scale up to 4 containers for burst traffic
     image=dolphin_image,
     gpu=GPU_TYPE,  # T4 GPU: 16GB VRAM, optimized for cost/performance
     max_containers=MAX_CONTAINERS,  # Scale up for burst traffic
-    scaledown_window=60,  # Scale down after 1 minute idle (was 5 minutes)
+    scaledown_window=120,
     min_containers=0,  # Scale to zero when idle (cost optimization)
     timeout=600,  # 10 minute timeout per request
     volumes=volumes,
