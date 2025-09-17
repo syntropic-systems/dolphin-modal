@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
 )
 
 // Request priorities
@@ -179,7 +177,16 @@ for i = 1, #items, 2 do
 end
 
 -- Store in processing queue with 30-minute TTL
-local batch_json = cjson.encode(batch_data)
+-- Return the batch data as a simple JSON string manually
+local batch_json = '{"id":"' .. batch_id .. '","status":"PROCESSING","requests":['
+for i = 1, #batch_data.requests do
+    if i > 1 then
+        batch_json = batch_json .. ','
+    end
+    batch_json = batch_json .. '"' .. string.gsub(batch_data.requests[i], '"', '\\"') .. '"'
+end
+batch_json = batch_json .. '],"sent_at":' .. current_time .. ',"retry_count":0}'
+
 redis.call('SET', processing_key .. ':' .. batch_id, batch_json, 'EX', 1800)
 
 return batch_json

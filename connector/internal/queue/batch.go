@@ -38,28 +38,16 @@ func NewAdaptiveBatchFormer(queue *PersistentQueue, maxBatchSize, minBatchSize i
 func (abf *AdaptiveBatchFormer) GetOptimalBatchSize() int {
 	queueDepth := abf.queue.Size()
 
-	// Adaptive strategy based on queue depth and recent performance
+	// Adaptive strategy based on queue depth - maximize batch efficiency
 	var batchSize int
 	switch {
-	case queueDepth >= 1000:
-		// High load: maximize throughput with full batches
+	case queueDepth >= 32:
+		// Full batch - use Modal's maximum
 		batchSize = 32
 
-	case queueDepth >= 200:
-		// Medium-high load: balance throughput and latency
-		batchSize = 24
-
-	case queueDepth >= 50:
-		// Medium load: favor slightly smaller batches for better latency
-		batchSize = 16
-
-	case queueDepth >= 10:
-		// Low load: small batches for low latency
-		batchSize = 8
-
 	case queueDepth > 0:
-		// Very low load: process immediately, any size
-		batchSize = min(queueDepth, 4)
+		// Any number of requests - take everything up to 32
+		batchSize = min(queueDepth, 32)
 
 	default:
 		// No requests

@@ -5,7 +5,6 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // WorkerPool manages concurrent batch processing with bounded resources
@@ -74,10 +73,6 @@ func (wp *WorkerPool) Submit(task func()) error {
 	case <-wp.shutdown:
 		atomic.AddInt64(&wp.metrics.RejectedTasks, 1)
 		return fmt.Errorf("worker pool shutting down")
-
-	case <-time.After(30 * time.Second):
-		atomic.AddInt64(&wp.metrics.RejectedTasks, 1)
-		return fmt.Errorf("worker pool full - timeout after 30s")
 	}
 }
 

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"connector/internal/config"
 	"connector/internal/correlation"
+	"connector/internal/queue"
 )
 
 // HTTPServer represents the HTTP API server
@@ -27,6 +27,13 @@ type HTTPServer struct {
 type AggregationService interface {
 	GetHealthStatus() map[string]interface{}
 	GetQueueStatus() map[string]interface{}
+	GetQueue() Queue
+}
+
+// Queue interface for queue operations
+type Queue interface {
+	Size() int
+	Enqueue(*queue.ParseRequest) error
 }
 
 // NewHTTPServer creates a new HTTP server

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -37,7 +38,7 @@ type AggregationService struct {
 // NewAggregationService creates a new aggregation service
 func NewAggregationService(cfg *config.ServiceConfig) (*AggregationService, error) {
 	// Initialize Redis queue
-	queue, err := queue.NewPersistentQueue(
+	persistentQueue, err := queue.NewPersistentQueue(
 		cfg.Queue.RedisURL,
 		cfg.Queue.QueueKey,
 		cfg.Queue.ProcessingKey,
@@ -50,7 +51,7 @@ func NewAggregationService(cfg *config.ServiceConfig) (*AggregationService, erro
 
 	// Initialize batch former
 	batchFormer := queue.NewAdaptiveBatchFormer(
-		queue,
+		persistentQueue,
 		cfg.BatchFormation.MaxBatchSize,
 		cfg.BatchFormation.MinBatchSize,
 		200*time.Millisecond, // max wait time
@@ -70,7 +71,7 @@ func NewAggregationService(cfg *config.ServiceConfig) (*AggregationService, erro
 	workerPool := worker.NewWorkerPool(cfg.Modal.MaxConcurrentBatches)
 
 	as := &AggregationService{
-		queue:          queue,
+		queue:          persistentQueue,
 		batchFormer:    batchFormer,
 		modalClient:    modalClient,
 		responseRouter: responseRouter,
@@ -267,6 +268,11 @@ func (as *AggregationService) GetQueueStatus() map[string]interface{} {
 	}
 }
 
+// GetQueue returns the queue for interface compatibility
+func (as *AggregationService) GetQueue() server.Queue {
+	return as.queue
+}
+
 // Shutdown gracefully shuts down the service
 func (as *AggregationService) Shutdown(ctx context.Context) error {
 	log.Printf("Starting graceful shutdown...")
@@ -317,7 +323,7 @@ func main() {
 	}
 
 	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Handle shutdown signals

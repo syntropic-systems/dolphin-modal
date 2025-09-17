@@ -4,9 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
-	"context"
 	"bytes"
 
 	"github.com/gin-gonic/gin"
@@ -46,7 +44,7 @@ func (hs *HTTPServer) handleParseRequest(c *gin.Context) {
 	}
 
 	// Check backpressure before accepting request
-	queueDepth := hs.aggregationService.queue.Size()
+	queueDepth := hs.aggregationService.GetQueue().Size()
 	if queueDepth >= hs.config.Server.BackpressureThreshold {
 		c.JSON(503, gin.H{
 			"error": "service at capacity",
@@ -78,7 +76,7 @@ func (hs *HTTPServer) handleParseRequest(c *gin.Context) {
 	hs.responseRouter.RegisterRequest(parseReq)
 
 	// Add to queue with error handling
-	if err := hs.aggregationService.queue.Enqueue(parseReq); err != nil {
+	if err := hs.aggregationService.GetQueue().Enqueue(parseReq); err != nil {
 		// Clean up response router registration
 		hs.responseRouter.CleanupRequest(parseReq.ID)
 
@@ -185,7 +183,7 @@ func (hs *HTTPServer) handleHealthCheck(c *gin.Context) {
 
 // handleQueueStatus returns detailed queue status
 func (hs *HTTPServer) handleQueueStatus(c *gin.Context) {
-	queueDepth := hs.aggregationService.queue.Size()
+	queueDepth := hs.aggregationService.GetQueue().Size()
 	maxQueueSize := hs.config.Queue.MaxSize
 
 	status := gin.H{

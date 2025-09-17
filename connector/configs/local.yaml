@@ -1,10 +1,10 @@
 server:
   port: 8080
   max_connections: 100
-  read_timeout: 300s
-  write_timeout: 300s
+  read_timeout: 900s    # 15 minutes for long-polling
+  write_timeout: 900s   # 15 minutes for long-polling
   max_request_size: 52428800
-  rate_limit_per_client: 20   # Higher limit for testing
+  rate_limit_per_client: 1000   # Much higher limit for testing parallel requests
   graceful_shutdown_timeout: 10s
   backpressure_threshold: 50   # Lower threshold for testing
 
@@ -18,13 +18,13 @@ queue:
   recovery_interval: 1m
 
 batch_formation:
-  max_batch_size: 8      # Smaller batches for testing
+  max_batch_size: 32     # Match Modal's T4 GPU limit
   min_batch_size: 1
-  check_interval: 100ms  # More frequent checks
+  check_interval: 1s     # Wait 1 second to collect all requests
 
 modal:
   base_url: "https://abhishekgautam011--dolphin-parser-dolphinparser"
-  timeout: 60s
+  timeout: 600s     # 10 minutes - only for connection, not processing
   max_retries: 2
   retry_delay: 1s
   max_concurrent_batches: 2

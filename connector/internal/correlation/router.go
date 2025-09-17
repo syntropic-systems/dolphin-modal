@@ -7,6 +7,9 @@ import (
 	"time"
 	"context"
 	"strings"
+	"os"
+	"encoding/json"
+	"path/filepath"
 
 	"connector/internal/queue"
 	"connector/internal/modal"
@@ -56,13 +59,26 @@ func (rr *ResponseRouter) RouteResponses(batch *queue.BatchState, modalResp *mod
 	log.Printf("Routing responses for batch %s: %d results for %d requests",
 		batch.ID, len(modalResp.Results), len(batch.Requests))
 
+	// Debug: log all filenames returned by Modal
+	log.Printf("Modal returned filenames:")
+	for i, result := range modalResp.Results {
+		log.Printf("  [%d] %s", i, result.Filename)
+	}
+
+	// Debug: log all request IDs we're looking for
+	log.Printf("Looking for request IDs:")
+	for i, req := range batch.Requests {
+		log.Printf("  [%d] %s (first 12: %s)", i, req.ID, req.ID[:12])
+	}
+
 	// Create correlation map: extract request ID from Modal's correlation filename
 	resultMap := make(map[string]modal.ModalImageResult)
 	for _, result := range modalResp.Results {
 		// Extract request ID from correlation filename
 		// Format: req_{requestID}_{batchIndex}_{originalFilename}
-		if requestID := extractRequestIDFromFilename(result.Filename); requestID != "" {
-			resultMap[requestID] = result
+		if extractedID := extractRequestIDFromFilename(result.Filename); extractedID != "" {
+			resultMap[extractedID] = result
+			log.Printf("Mapped filename '%s' to extracted ID '%s'", result.Filename, extractedID)
 		} else {
 			log.Printf("Warning: Could not extract request ID from filename: %s", result.Filename)
 		}
@@ -72,7 +88,9 @@ func (rr *ResponseRouter) RouteResponses(batch *queue.BatchState, modalResp *mod
 	for _, req := range batch.Requests {
 		var response *queue.ParseResponse
 
-		if result, exists := resultMap[req.ID]; exists {
+		// Use first 12 characters for correlation since Modal client truncates IDs
+		shortID := req.ID[:12]
+		if result, exists := resultMap[shortID]; exists {
 			// Successful result found by request ID correlation
 			response = &queue.ParseResponse{
 				RequestID:       req.ID,
@@ -117,8 +135,39 @@ func extractRequestIDFromFilename(filename string) string {
 	return parts[1]
 }
 
+// writeResponseToFile writes the response to a debug file
+func (rr *ResponseRouter) writeResponseToFile(response *queue.ParseResponse) {
+	// Create debug directory if it doesn't exist
+	debugDir := "./debug_responses"
+	if err := os.MkdirAll(debugDir, 0755); err != nil {
+		log.Printf("Failed to create debug directory: %v", err)
+		return
+	}
+
+	// Create filename with timestamp
+	filename := fmt.Sprintf("response_%s_%d.json", response.RequestID[:12], time.Now().Unix())
+	filepath := filepath.Join(debugDir, filename)
+
+	// Write response as JSON
+	data, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		log.Printf("Failed to marshal response: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(filepath, data, 0644); err != nil {
+		log.Printf("Failed to write response file: %v", err)
+		return
+	}
+
+	log.Printf("Response written to file: %s", filepath)
+}
+
 // deliverResponse delivers a response to the waiting client
 func (rr *ResponseRouter) deliverResponse(requestID string, response *queue.ParseResponse) {
+	// Write response to debug file
+	rr.writeResponseToFile(response)
+
 	if ctx, exists := rr.pendingResponses.LoadAndDelete(requestID); exists {
 		respCtx := ctx.(ResponseContext)
 

@@ -10,7 +10,6 @@ import (
 	"math"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"connector/internal/queue"
@@ -166,7 +165,7 @@ func (mc *ModalClient) attemptRequest(modalReq *ModalBatchRequest) (*ModalBatchR
 	ctx, cancel := context.WithTimeout(context.Background(), mc.timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", mc.baseURL+"/parse-batch", bytes.NewBuffer(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", mc.baseURL+"-parse-batch.modal.run", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, fmt.Errorf("request creation failed: %v", err)
 	}
@@ -205,7 +204,7 @@ func (mc *ModalClient) HealthCheck() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", mc.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", mc.baseURL+"-health.modal.run", nil)
 	if err != nil {
 		return err
 	}
