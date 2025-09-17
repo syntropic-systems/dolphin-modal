@@ -1,0 +1,254 @@
+basePath: /
+definitions:
+  server.DocumentRequest:
+    properties:
+      filename:
+        description: Optional filename for the document
+        example: document.jpg
+        type: string
+      image_data:
+        description: Base64 encoded image data (JPEG/PNG)
+        example: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+        format: base64
+        type: string
+    required:
+    - image_data
+    type: object
+  server.Element:
+    properties:
+      bbox:
+        description: Bounding box [x1, y1, x2, y2]
+        example:
+        - 100
+        - 200
+        - 400
+        - 300
+        items:
+          type: integer
+        type: array
+      label:
+        description: Element type
+        enum:
+        - title
+        - para
+        - table
+        - figure
+        - formula
+        example: title
+        type: string
+      reading_order:
+        description: Sequential reading order
+        example: 1
+        type: integer
+      text:
+        description: Extracted text content
+        example: Document Title
+        type: string
+    type: object
+  server.ErrorResponse:
+    properties:
+      error:
+        example: Invalid request format
+        type: string
+    type: object
+  server.HealthResponse:
+    properties:
+      modal_api_error:
+        example: ""
+        type: string
+      queue_depth:
+        example: 0
+        type: integer
+      status:
+        enum:
+        - healthy
+        - degraded
+        - unhealthy
+        example: healthy
+        type: string
+      timestamp:
+        example: "2025-09-17T14:30:00Z"
+        type: string
+      worker_pool:
+        additionalProperties: true
+        type: object
+    type: object
+  server.ParseResponse:
+    properties:
+      batch_id:
+        example: batch_123
+        type: string
+      batch_index:
+        example: 0
+        type: integer
+      element_count:
+        example: 5
+        type: integer
+      elements:
+        items:
+          $ref: '#/definitions/server.Element'
+        type: array
+      error:
+        example: ""
+        type: string
+      filename:
+        example: document.jpg
+        type: string
+      processing_time_seconds:
+        example: 45.2
+        type: number
+      request_id:
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      success:
+        example: true
+        type: boolean
+      timestamp:
+        example: "2025-09-17T14:30:00Z"
+        type: string
+    type: object
+  server.QueueStatusResponse:
+    properties:
+      estimated_wait_time_minutes:
+        example: 2
+        type: integer
+      max_queue_size:
+        example: 1000
+        type: integer
+      queue_depth:
+        example: 5
+        type: integer
+      utilization_percent:
+        example: 0.5
+        type: number
+    type: object
+host: 100.123.49.70:8199
+info:
+  contact:
+    email: support@example.com
+    name: API Support
+  description: A high-performance document parsing service with batch processing and
+    intelligent queueing
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: Dolphin Document Parser API
+  version: "1.0"
+paths:
+  /demo:
+    post:
+      consumes:
+      - application/json
+      description: Demo endpoint for testing single document parsing with example
+        response
+      parameters:
+      - description: Document parsing request (same as /parse)
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.DocumentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Successfully parsed document (demo)
+          schema:
+            $ref: '#/definitions/server.ParseResponse'
+        "400":
+          description: Invalid request format
+          schema:
+            $ref: '#/definitions/server.ErrorResponse'
+      summary: Demo endpoint
+      tags:
+      - demo
+  /health:
+    get:
+      description: Check the health status of the service including Modal API connectivity
+        and queue status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Service is healthy
+          schema:
+            $ref: '#/definitions/server.HealthResponse'
+        "503":
+          description: Service is degraded or unhealthy
+          schema:
+            $ref: '#/definitions/server.HealthResponse'
+      summary: Health check
+      tags:
+      - monitoring
+  /metrics:
+    get:
+      description: Get Prometheus-compatible metrics (placeholder implementation)
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Prometheus metrics format
+          schema:
+            type: string
+      summary: Metrics
+      tags:
+      - monitoring
+  /parse:
+    post:
+      consumes:
+      - application/json
+      description: Parse a document image using OCR and layout analysis. Supports
+        JPEG and PNG formats up to 50MB.
+      parameters:
+      - description: Document parsing request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.DocumentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Successfully parsed document
+          schema:
+            $ref: '#/definitions/server.ParseResponse'
+        "400":
+          description: Invalid request format or unsupported image
+          schema:
+            $ref: '#/definitions/server.ErrorResponse'
+        "408":
+          description: Processing timeout
+          schema:
+            $ref: '#/definitions/server.ErrorResponse'
+        "413":
+          description: Image too large (>50MB)
+          schema:
+            $ref: '#/definitions/server.ErrorResponse'
+        "500":
+          description: Internal processing error
+          schema:
+            $ref: '#/definitions/server.ErrorResponse'
+        "503":
+          description: Service at capacity
+          schema:
+            $ref: '#/definitions/server.ErrorResponse'
+      summary: Parse document
+      tags:
+      - document
+  /queue/status:
+    get:
+      description: Get detailed information about the current queue status and estimated
+        wait times
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Queue status information
+          schema:
+            $ref: '#/definitions/server.QueueStatusResponse'
+      summary: Queue status
+      tags:
+      - monitoring
+swagger: "2.0"

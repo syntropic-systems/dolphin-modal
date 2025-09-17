@@ -1,46 +1,12 @@
 server:
-  port: 8080
-  max_connections: 100
-  read_timeout: 900s    # 15 minutes for long-polling
-  write_timeout: 900s   # 15 minutes for long-polling
-  max_request_size: 52428800
-  rate_limit_per_client: 1000   # Much higher limit for testing parallel requests
-  graceful_shutdown_timeout: 10s
-  backpressure_threshold: 50   # Lower threshold for testing
-
-queue:
-  redis_url: "redis://localhost:6379"
-  max_size: 100          # Smaller queue for testing
-  ttl: 1h               # Shorter TTL for testing
-  queue_key: "dolphin:test:requests"
-  processing_key: "dolphin:test:processing"
-  max_retry_count: 2
-  recovery_interval: 1m
+  port: 8199
 
 batch_formation:
-  max_batch_size: 32     # Match Modal's T4 GPU limit
-  min_batch_size: 1
-  check_interval: 1s     # Wait 1 second to collect all requests
+  max_batch_size: 32
+  check_interval: 1s
 
 modal:
   base_url: "https://abhishekgautam011--dolphin-parser-dolphinparser"
-  timeout: 600s     # 10 minutes - only for connection, not processing
+  timeout: 600s
   max_retries: 2
   retry_delay: 1s
-  max_concurrent_batches: 2
-  circuit_breaker:
-    failure_threshold: 3
-    cooldown_period: 10s
-    health_check_interval: 5s
-  connection_pool:
-    max_idle_connections: 5
-    idle_connection_timeout: 30s
-
-response:
-  timeout: 5m
-  cleanup_interval: 1m
-
-monitoring:
-  enable_metrics: true
-  prometheus_port: 9090
-  log_level: "debug"

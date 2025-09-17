@@ -7,10 +7,15 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
+	"connector/docs"
 	"connector/internal/config"
 	"connector/internal/correlation"
 	"connector/internal/queue"
+
+	_ "connector/docs"
 )
 
 // HTTPServer represents the HTTP API server
@@ -85,10 +90,16 @@ func NewHTTPServer(
 
 // setupRoutes configures API routes
 func (hs *HTTPServer) setupRoutes() {
+	// API routes
 	hs.router.POST("/parse", hs.handleParseRequest)
 	hs.router.GET("/health", hs.handleHealthCheck)
 	hs.router.GET("/metrics", hs.handleMetrics)
 	hs.router.GET("/queue/status", hs.handleQueueStatus)
+	hs.router.POST("/demo", hs.handleDemoRequest)
+
+	// Swagger documentation
+	docs.SwaggerInfo.Host = fmt.Sprintf("100.123.49.70:%d", hs.config.Server.Port)
+	hs.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 }
 
 // Start starts the HTTP server

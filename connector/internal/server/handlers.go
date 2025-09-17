@@ -13,23 +13,85 @@ import (
 	"connector/internal/queue"
 )
 
+// @title Dolphin Document Parser API
+// @version 1.0
+// @description A high-performance document parsing service with batch processing and intelligent queueing
+// @termsOfService http://swagger.io/terms/
+
+// @contact.name API Support
+// @contact.email support@example.com
+
+// @license.name MIT
+// @license.url https://opensource.org/licenses/MIT
+
+// @host 100.123.49.70:8199
+// @BasePath /
+
 // DocumentRequest represents the incoming API request
 type DocumentRequest struct {
-	ImageData string `json:"image_data" binding:"required"`
-	Filename  string `json:"filename"`
+	ImageData string `json:"image_data" binding:"required" example:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" format:"base64"` // Base64 encoded image data (JPEG/PNG)
+	Filename  string `json:"filename" example:"document.jpg"` // Optional filename for the document
+}
+
+// ParseResponse represents the API response
+type ParseResponse struct {
+	RequestID      string    `json:"request_id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Filename       string    `json:"filename" example:"document.jpg"`
+	Elements       []Element `json:"elements"`
+	ElementCount   int       `json:"element_count" example:"5"`
+	ProcessingTime float64   `json:"processing_time_seconds" example:"45.2"`
+	Success        bool      `json:"success" example:"true"`
+	Error          string    `json:"error,omitempty" example:""`
+	BatchID        string    `json:"batch_id" example:"batch_123"`
+	Timestamp      string    `json:"timestamp" example:"2025-09-17T14:30:00Z"`
+	BatchIndex     int       `json:"batch_index,omitempty" example:"0"`
+}
+
+// Element represents a document element
+type Element struct {
+	Label        string `json:"label" example:"title" enums:"title,para,table,figure,formula"`        // Element type
+	Bbox         []int  `json:"bbox" example:"100,200,400,300"`         // Bounding box [x1, y1, x2, y2]
+	Text         string `json:"text" example:"Document Title"`         // Extracted text content
+	ReadingOrder int    `json:"reading_order" example:"1"` // Sequential reading order
+}
+
+// HealthResponse represents health check response
+type HealthResponse struct {
+	Status           string `json:"status" example:"healthy" enums:"healthy,degraded,unhealthy"`
+	ModalAPIError    string `json:"modal_api_error,omitempty" example:""`
+	QueueDepth       int    `json:"queue_depth" example:"0"`
+	Timestamp        string `json:"timestamp" example:"2025-09-17T14:30:00Z"`
+	WorkerPoolStats  map[string]interface{} `json:"worker_pool"`
+}
+
+// QueueStatusResponse represents queue status response
+type QueueStatusResponse struct {
+	QueueDepth              int     `json:"queue_depth" example:"5"`
+	MaxQueueSize            int     `json:"max_queue_size" example:"1000"`
+	UtilizationPercent      float64 `json:"utilization_percent" example:"0.5"`
+	EstimatedWaitTimeMinutes int     `json:"estimated_wait_time_minutes" example:"2"`
+}
+
+// ErrorResponse represents error response
+type ErrorResponse struct {
+	Error string `json:"error" example:"Invalid request format"`
 }
 
 // handleParseRequest handles individual document parsing requests with long-polling
+// @Summary Parse document
+// @Description Parse a document image using OCR and layout analysis. Supports JPEG and PNG formats up to 50MB.
+// @Tags document
+// @Accept json
+// @Produce json
+// @Param request body DocumentRequest true "Document parsing request"
+// @Success 200 {object} ParseResponse "Successfully parsed document"
+// @Failure 400 {object} ErrorResponse "Invalid request format or unsupported image"
+// @Failure 413 {object} ErrorResponse "Image too large (>50MB)"
+// @Failure 503 {object} ErrorResponse "Service at capacity"
+// @Failure 500 {object} ErrorResponse "Internal processing error"
+// @Failure 408 {object} ErrorResponse "Processing timeout"
+// @Router /parse [post]
 func (hs *HTTPServer) handleParseRequest(c *gin.Context) {
-	// Rate limiting check
-	clientIP := c.ClientIP()
-	if !hs.rateLimiter.Allow(clientIP) {
-		c.JSON(429, gin.H{
-			"error": "rate limit exceeded",
-			"retry_after_seconds": 60,
-		})
-		return
-	}
 
 	var req DocumentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -43,17 +105,6 @@ func (hs *HTTPServer) handleParseRequest(c *gin.Context) {
 		return
 	}
 
-	// Check backpressure before accepting request
-	queueDepth := hs.aggregationService.GetQueue().Size()
-	if queueDepth >= hs.config.Server.BackpressureThreshold {
-		c.JSON(503, gin.H{
-			"error": "service at capacity",
-			"queue_depth": queueDepth,
-			"estimated_wait_minutes": hs.estimateWaitTime(queueDepth),
-			"retry_after_seconds": 60,
-		})
-		return
-	}
 
 	// Generate unique filename if not provided
 	filename := req.Filename
@@ -91,7 +142,7 @@ func (hs *HTTPServer) handleParseRequest(c *gin.Context) {
 		return
 	}
 
-	log.Printf("Request %s queued (queue depth: %d)", parseReq.ID, queueDepth+1)
+	log.Printf("Request %s queued", parseReq.ID)
 
 	// Wait for response (long-polling) - synchronous operation
 	select {
@@ -171,6 +222,13 @@ func (hs *HTTPServer) estimateWaitTime(queueDepth int) int {
 }
 
 // handleHealthCheck returns service health status
+// @Summary Health check
+// @Description Check the health status of the service including Modal API connectivity and queue status
+// @Tags monitoring
+// @Produce json
+// @Success 200 {object} HealthResponse "Service is healthy"
+// @Success 503 {object} HealthResponse "Service is degraded or unhealthy"
+// @Router /health [get]
 func (hs *HTTPServer) handleHealthCheck(c *gin.Context) {
 	status := hs.aggregationService.GetHealthStatus()
 
@@ -182,6 +240,12 @@ func (hs *HTTPServer) handleHealthCheck(c *gin.Context) {
 }
 
 // handleQueueStatus returns detailed queue status
+// @Summary Queue status
+// @Description Get detailed information about the current queue status and estimated wait times
+// @Tags monitoring
+// @Produce json
+// @Success 200 {object} QueueStatusResponse "Queue status information"
+// @Router /queue/status [get]
 func (hs *HTTPServer) handleQueueStatus(c *gin.Context) {
 	queueDepth := hs.aggregationService.GetQueue().Size()
 	maxQueueSize := hs.config.Queue.MaxSize
@@ -197,9 +261,30 @@ func (hs *HTTPServer) handleQueueStatus(c *gin.Context) {
 }
 
 // handleMetrics returns Prometheus metrics (placeholder)
+// @Summary Metrics
+// @Description Get Prometheus-compatible metrics (placeholder implementation)
+// @Tags monitoring
+// @Produce plain
+// @Success 200 {string} string "Prometheus metrics format"
+// @Router /metrics [get]
 func (hs *HTTPServer) handleMetrics(c *gin.Context) {
 	// TODO: Implement Prometheus metrics
 	c.String(200, "# Metrics endpoint - implement Prometheus integration\n")
+}
+
+// handleDemoRequest handles single demo document parsing requests
+// @Summary Demo endpoint
+// @Description Demo endpoint for testing single document parsing with example response
+// @Tags demo
+// @Accept json
+// @Produce json
+// @Param request body DocumentRequest true "Document parsing request (same as /parse)"
+// @Success 200 {object} ParseResponse "Successfully parsed document (demo)"
+// @Failure 400 {object} ErrorResponse "Invalid request format"
+// @Router /demo [post]
+func (hs *HTTPServer) handleDemoRequest(c *gin.Context) {
+	// This is the same as parse request - just a different endpoint for demo purposes
+	hs.handleParseRequest(c)
 }
 
 // Helper function

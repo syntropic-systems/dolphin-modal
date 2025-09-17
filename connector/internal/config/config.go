@@ -123,15 +123,6 @@ func setDefaults(config *ServiceConfig) {
 	if config.Server.MaxRequestSize == 0 {
 		config.Server.MaxRequestSize = 52428800 // 50MB
 	}
-	if config.Server.RateLimitPerClient == 0 {
-		config.Server.RateLimitPerClient = 10
-	}
-	if config.Server.GracefulShutdownTimeout == 0 {
-		config.Server.GracefulShutdownTimeout = 30 * time.Second
-	}
-	if config.Server.BackpressureThreshold == 0 {
-		config.Server.BackpressureThreshold = 2500
-	}
 
 	// Queue defaults
 	if config.Queue.RedisURL == "" {
@@ -222,9 +213,6 @@ func validateConfig(config *ServiceConfig) error {
 		return fmt.Errorf("batch_formation.max_batch_size cannot exceed 32 (T4 GPU limit)")
 	}
 
-	if config.Server.BackpressureThreshold > config.Queue.MaxSize {
-		return fmt.Errorf("server.backpressure_threshold cannot exceed queue.max_size")
-	}
 
 	return nil
 }
