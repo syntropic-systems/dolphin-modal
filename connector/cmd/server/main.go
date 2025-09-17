@@ -23,7 +23,7 @@ import (
 
 // AggregationService is the main service that orchestrates batch processing
 type AggregationService struct {
-	queue          *queue.PersistentQueue
+	queue          *queue.InMemoryQueue
 	batchFormer    *queue.AdaptiveBatchFormer
 	modalClient    *modal.ModalClient
 	responseRouter *correlation.ResponseRouter
@@ -37,17 +37,8 @@ type AggregationService struct {
 
 // NewAggregationService creates a new aggregation service
 func NewAggregationService(cfg *config.ServiceConfig) (*AggregationService, error) {
-	// Initialize Redis queue
-	persistentQueue, err := queue.NewPersistentQueue(
-		cfg.Queue.RedisURL,
-		cfg.Queue.QueueKey,
-		cfg.Queue.ProcessingKey,
-		cfg.Queue.MaxSize,
-		cfg.Queue.TTL,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create queue: %v", err)
-	}
+	// Initialize in-memory queue
+	persistentQueue := queue.NewInMemoryQueue(cfg.Queue.MaxSize)
 
 	// Initialize batch former
 	batchFormer := queue.NewAdaptiveBatchFormer(

@@ -6,9 +6,14 @@ import (
 	"time"
 )
 
+// Queue interface for batch former
+type Queue interface {
+	Size() int
+}
+
 // AdaptiveBatchFormer implements smart batch formation based on queue depth and performance
 type AdaptiveBatchFormer struct {
-	queue        *PersistentQueue
+	queue        Queue
 	maxBatchSize int
 	minBatchSize int
 	maxWaitTime  time.Duration
@@ -24,7 +29,7 @@ type BatchMetrics struct {
 }
 
 // NewAdaptiveBatchFormer creates a new adaptive batch former
-func NewAdaptiveBatchFormer(queue *PersistentQueue, maxBatchSize, minBatchSize int, maxWaitTime time.Duration) *AdaptiveBatchFormer {
+func NewAdaptiveBatchFormer(queue Queue, maxBatchSize, minBatchSize int, maxWaitTime time.Duration) *AdaptiveBatchFormer {
 	return &AdaptiveBatchFormer{
 		queue:        queue,
 		maxBatchSize: maxBatchSize,

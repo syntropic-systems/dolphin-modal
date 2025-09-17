@@ -34,6 +34,11 @@ type AggregationService interface {
 type Queue interface {
 	Size() int
 	Enqueue(*queue.ParseRequest) error
+	StartBatchProcessing(batchID string, maxSize int) (*queue.BatchState, error)
+	CompleteBatch(batchID string) error
+	FailBatch(batchID string, errorMsg string) error
+	RecoverStuckBatches() error
+	Close() error
 }
 
 // NewHTTPServer creates a new HTTP server
